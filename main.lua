@@ -1,632 +1,573 @@
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local HttpService = game:GetService("HttpService")
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local TeleportService = game:GetService("TeleportService")
-local UserInputService = game:GetService("UserInputService")
-local StarterGui = game:GetService("StarterGui")
+-- CLEAN REAL-TIME MONITOR - WITH NEW EVENTSHOP_UI SUPPORT
+print("🔥 Clean Real-Time Monitor Starting - WITH EVENTSHOP_UI SUPPORT...")
 
 -- Configuration
-local CONFIG = {
-    API_URL = "https://bloxfritushit.vercel.app/api/stocks/bloxfruits",
-    AUTH_HEADER = "GAMERSBERG",
-    UPDATE_INTERVAL = 10,
-    RETRY_DELAY = 5,
-    MAX_RETRIES = 3,
-    SESSION_ID = HttpService:GenerateGUID(false),
+local API_ENDPOINT = "https://gagdata.vercel.app/api/data"
+local DELETE_ENDPOINT = "https://gagdata.vercel.app/api/delete"
+local API_KEY = "GAMERSBERGGAG"
+local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1375178535198785586/-kGnmx4QJnWlOOqPutLGurRu132ALTTAne8d4MMgNvTJg825vkpT1yU9R_-s74GBDO9z"
+local CHECK_INTERVAL = 1
+local HEARTBEAT_INTERVAL = 10
+local DISCORD_UPDATE_INTERVAL = 300
+
+-- Session and Cache
+local Cache = {
+    sessionId = tostring(os.time()) .. "_" .. tostring(math.random(1000, 9999)),
+    updateCounter = 0,
+    lastHeartbeat = 0,
+    lastDiscordUpdate = 0,
+    currentWeather = "None",
+    weatherDuration = 0,
     
-    -- Enhanced Anti-AFK Settings
-    ANTI_AFK_MIN_INTERVAL = 60,  -- 1 minute minimum
-    ANTI_AFK_MAX_INTERVAL = 180, -- 3 minutes maximum
-    MOVEMENT_DISTANCE = 15,      -- increased movement range
-    TOOL_USE_CHANCE = 0.7,       -- 70% chance to use tool
-    WALK_DURATION = 3,           -- seconds to walk
-    EMERGENCY_AFK_TIME = 1080    -- 18 minutes (before 20min kick)
+    -- Stock caches - ADDED EVENTSHOP
+    seeds = {}, gear = {}, event = {}, cosmetic = {}, nightevent = {}, honeyevent = {}, eventshop = {},
+    eggs = {}
 }
 
--- State Management
-local State = {
-    isRunning = false,
-    lastUpdate = 0,
-    retryCount = 0,
-    sessionActive = true,
-    lastStockHash = "",
-    totalUpdates = 0,
-    lastAntiAfk = 0,
-    nextAntiAfk = 0,
-    lastActivity = os.time(),
-    emergencyMode = false
+-- UI element patterns to ignore
+local IGNORE_PATTERNS = {
+    "_padding", "padding", "uilistlayout", "uigridlayout", "uipadding", 
+    "uicorner", "uistroke", "uigradient", "uiaspectratioconstraint"
 }
 
--- Client-side Logging Functions
-local function notify(title, text, duration)
+-- Check if item should be ignored
+local function shouldIgnoreItem(itemName)
+    local lowerName = string.lower(itemName)
+    for _, pattern in ipairs(IGNORE_PATTERNS) do
+        if lowerName:match(pattern) then return true end
+    end
+    return false
+end
+
+-- Discord notification
+local function sendToDiscord(content, isError)
     pcall(function()
-        StarterGui:SetCore("SendNotification", {
-            Title = title,
-            Text = text,
-            Duration = duration or 5
+        local message = {
+            content = isError and "💥 **ERROR**" or "📊 **UPDATE**",
+            embeds = {{
+                description = content,
+                color = isError and 16711680 or 65280,
+                footer = {text = "Session: " .. Cache.sessionId},
+                timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
+            }}
+        }
+        request({
+            Url = DISCORD_WEBHOOK,
+            Method = "POST",
+            Headers = {["Content-Type"] = "application/json"},
+            Body = game:GetService("HttpService"):JSONEncode(message)
         })
     end)
 end
 
-local function log(level, message)
-    local timestamp = os.date("%H:%M:%S")
-    local logMessage = string.format("[%s] [%s] %s", timestamp, level, message)
-    
-    print(logMessage)
-    
-    if level == "ERROR" then
-        notify("Stock Monitor Error", message, 8)
-    elseif level == "INFO" and (string.find(message, "started") or string.find(message, "Anti-AFK")) then
-        notify("Anti-AFK", message, 5)
-    end
-end
-
--- Enhanced Anti-AFK System
-local function getRandomWalkDirection()
-    local angles = {0, 45, 90, 135, 180, 225, 270, 315}
-    local angle = math.rad(angles[math.random(1, #angles)])
-    local distance = math.random(5, CONFIG.MOVEMENT_DISTANCE)
-    
-    return Vector3.new(
-        math.cos(angle) * distance,
-        0,
-        math.sin(angle) * distance
-    )
-end
-
-local function performWalkMovement()
-    local character = Players.LocalPlayer.Character
-    if not character then return false end
-    
-    local humanoid = character:FindFirstChild("Humanoid")
-    local rootPart = character:FindFirstChild("HumanoidRootPart")
-    
-    if not humanoid or not rootPart then return false end
-    
-    -- Get current position
-    local currentPosition = rootPart.Position
-    local walkDirection = getRandomWalkDirection()
-    local targetPosition = currentPosition + walkDirection
-    
-    -- Start walking
-    humanoid:MoveTo(targetPosition)
-    log("DEBUG", string.format("Walking to position: %.1f, %.1f, %.1f", 
-        targetPosition.X, targetPosition.Y, targetPosition.Z))
-    
-    -- Walk for random duration
-    local walkTime = math.random(2, CONFIG.WALK_DURATION)
-    task.wait(walkTime)
-    
-    -- Stop walking by moving to current position
-    humanoid:MoveTo(rootPart.Position)
-    
-    return true
-end
-
-local function performComplexMovement()
-    local character = Players.LocalPlayer.Character
-    if not character then return false end
-    
-    local humanoid = character:FindFirstChild("Humanoid")
-    local rootPart = character:FindFirstChild("HumanoidRootPart")
-    
-    if not humanoid or not rootPart then return false end
-    
-    local movementType = math.random(1, 6)
-    
-    if movementType == 1 then
-        -- Walk in a small circle
-        local center = rootPart.Position
-        for i = 1, 8 do
-            local angle = (i / 8) * math.pi * 2
-            local offset = Vector3.new(math.cos(angle) * 5, 0, math.sin(angle) * 5)
-            humanoid:MoveTo(center + offset)
-            task.wait(0.5)
-        end
-        log("DEBUG", "Anti-AFK: Circular walk completed")
-        
-    elseif movementType == 2 then
-        -- Walk back and forth
-        local startPos = rootPart.Position
-        local direction = getRandomWalkDirection()
-        
-        humanoid:MoveTo(startPos + direction)
-        task.wait(2)
-        humanoid:MoveTo(startPos - direction)
-        task.wait(2)
-        humanoid:MoveTo(startPos)
-        log("DEBUG", "Anti-AFK: Back and forth walk")
-        
-    elseif movementType == 3 then
-        -- Jump while walking
-        performWalkMovement()
-        task.wait(0.5)
-        humanoid.Jump = true
-        task.wait(1)
-        humanoid.Jump = true
-        log("DEBUG", "Anti-AFK: Jump walk")
-        
-    elseif movementType == 4 then
-        -- Spin and walk
-        local currentCFrame = rootPart.CFrame
-        for i = 1, 4 do
-            rootPart.CFrame = currentCFrame * CFrame.Angles(0, math.rad(90 * i), 0)
-            task.wait(0.3)
-        end
-        performWalkMovement()
-        log("DEBUG", "Anti-AFK: Spin and walk")
-        
-    elseif movementType == 5 then
-        -- Random direction changes
-        for i = 1, 5 do
-            local direction = getRandomWalkDirection()
-            humanoid:MoveTo(rootPart.Position + direction)
-            task.wait(math.random(1, 2))
-        end
-        log("DEBUG", "Anti-AFK: Random direction walk")
-        
-    else
-        -- Simple walk
-        performWalkMovement()
-        log("DEBUG", "Anti-AFK: Simple walk")
-    end
-    
-    return true
-end
-
-local function getAllTools()
-    local tools = {}
-    local backpack = Players.LocalPlayer:FindFirstChild("Backpack")
-    local character = Players.LocalPlayer.Character
-    
-    -- Get tools from backpack
-    if backpack then
-        for _, item in pairs(backpack:GetChildren()) do
-            if item:IsA("Tool") then
-                table.insert(tools, item)
-            end
-        end
-    end
-    
-    -- Get equipped tools
-    if character then
-        for _, item in pairs(character:GetChildren()) do
-            if item:IsA("Tool") then
-                table.insert(tools, item)
-            end
-        end
-    end
-    
-    return tools
-end
-
-local function useToolAdvanced()
-    local tools = getAllTools()
-    if #tools == 0 then 
-        log("DEBUG", "No tools available")
-        return false 
-    end
-    
-    local character = Players.LocalPlayer.Character
-    if not character then return false end
-    
-    local humanoid = character:FindFirstChild("Humanoid")
-    if not humanoid then return false end
-    
-    -- Select random tool
-    local tool = tools[math.random(1, #tools)]
-    
+-- AUTO-DELETE function
+local function autoDeleteOnCrash()
     pcall(function()
-        -- Equip tool if not already equipped
-        if tool.Parent ~= character then
-            humanoid:EquipTool(tool)
-            task.wait(math.random(1, 2))
+        local deleteData = {
+            action = "DELETE_ALL",
+            sessionId = Cache.sessionId,
+            playerName = game.Players.LocalPlayer.Name,
+            timestamp = os.time()
+        }
+        
+        request({
+            Url = DELETE_ENDPOINT,
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json",
+                ["Authorization"] = API_KEY,
+                ["X-Session-ID"] = Cache.sessionId
+            },
+            Body = game:GetService("HttpService"):JSONEncode(deleteData)
+        })
+        
+        sendToDiscord("🗑️ Auto-delete triggered - Data removed from API", true)
+    end)
+end
+
+-- COLLECT ALL EGGS - REAL-TIME UPDATES
+local function collectEggData()
+    local eggs = {}
+    local eggCounts = {}
+    
+    local success, result = pcall(function()
+        local NPCs = workspace:FindFirstChild("NPCS")
+        if not NPCs then return {} end
+        
+        local PetStand = NPCs:FindFirstChild("Pet Stand")
+        if not PetStand then return {} end
+        
+        -- Try ALL possible egg location folder names
+        local possibleNames = {
+            "EggLocations", "Egg Locations", "Eggs", "EggLocation", 
+            "Egg_Locations", "EggModels", "Egg Models", "PetEggs"
+        }
+        
+        local EggLocations = nil
+        for _, name in ipairs(possibleNames) do
+            EggLocations = PetStand:FindFirstChild(name)
+            if EggLocations then
+                break
+            end
         end
         
-        if tool.Parent == character then
-            log("DEBUG", "Using tool: " .. tool.Name)
+        if not EggLocations then return {} end
+        
+        -- Count EVERY model in the egg folder (no filtering)
+        for _, eggModel in pairs(EggLocations:GetChildren()) do
+            local eggName = eggModel.Name
+            eggCounts[eggName] = (eggCounts[eggName] or 0) + 1
+        end
+        
+        -- Convert ALL eggs to array format
+        for eggName, count in pairs(eggCounts) do
+            table.insert(eggs, {name = eggName, quantity = count})
+        end
+        
+        return eggs
+    end)
+    
+    return (success and result) or {}
+end
+
+-- CLEAN STOCK GETTER
+local function getStock(item, shopName)
+    local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild(shopName)
+    if not shopUI then return "0" end
+
+    for _, obj in ipairs(shopUI:GetDescendants()) do
+        if obj:IsA("Frame") and obj.Name == item then
+            for _, desc in ipairs(obj:GetDescendants()) do
+                if desc:IsA("TextLabel") and (desc.Name == "Stock_Text" or desc.Name == "STOCK_TEXT") then
+                    return desc.Text:match("%d+") or "0"
+                end
+            end
+        end
+    end
+    return "0"
+end
+
+-- CLEAN ITEM GETTER
+local function getAvailableItems(shopName)
+    local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild(shopName)
+    if not shopUI then return {} end
+
+    local scrollFrame
+    if shopUI:FindFirstChild("Frame") and shopUI.Frame:FindFirstChild("ScrollingFrame") then
+        scrollFrame = shopUI.Frame.ScrollingFrame
+    else
+        for _, child in pairs(shopUI:GetDescendants()) do
+            if child:IsA("ScrollingFrame") or child.Name == "ContentFrame" then
+                scrollFrame = child
+                break
+            end
+        end
+    end
+    if not scrollFrame then return {} end
+
+    local names = {}
+    
+    -- Special handling for cosmetic shop
+    if shopName == "CosmeticShop_UI" then
+        for _, segment in pairs(scrollFrame:GetChildren()) do
+            if segment:IsA("Frame") and (segment.Name == "TopSegment" or segment.Name == "BottomSegment") then
+                for _, item in pairs(segment:GetChildren()) do
+                    if item:IsA("Frame") and not shouldIgnoreItem(item.Name) then
+                        table.insert(names, item.Name)
+                    end
+                end
+            end
+        end
+    else
+        for _, item in pairs(scrollFrame:GetChildren()) do
+            if item:IsA("Frame") and not shouldIgnoreItem(item.Name) then
+                table.insert(names, item.Name)
+            end
+        end
+    end
+    
+    return names
+end
+
+-- NEW EVENTSHOP_UI COLLECTION - DUAL METHOD APPROACH
+local function collectEventShopData()
+    print("🛍️ Collecting EventShop_UI data...")
+    
+    -- Method 1: Standard approach
+    local success1, eventShopNames = pcall(function() 
+        return getAvailableItems("EventShop_UI") 
+    end)
+    
+    if success1 and #eventShopNames > 0 then
+        print("✅ EventShop_UI Method 1 worked - Found " .. #eventShopNames .. " items")
+        local data = {}
+        for _, name in ipairs(eventShopNames) do
+            local stock = getStock(name, "EventShop_UI")
+            data[name] = stock
+            print("🛍️ EventShop item: " .. name .. " = " .. stock)
+        end
+        return data
+    else
+        print("❌ EventShop_UI Method 1 failed, trying Method 2...")
+    end
+    
+    -- Method 2: Alternative deep scan approach
+    local success2, result = pcall(function()
+        local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild("EventShop_UI")
+        if not shopUI then 
+            print("❌ EventShop_UI not found in PlayerGui")
+            return {} 
+        end
+        
+        print("✅ Found EventShop_UI, scanning structure...")
+        local data = {}
+        local itemCount = 0
+        
+        -- Deep scan for all frames with stock text
+        for _, obj in ipairs(shopUI:GetDescendants()) do
+            if obj:IsA("Frame") and not shouldIgnoreItem(obj.Name) then
+                -- Look for stock text in this frame
+                for _, child in ipairs(obj:GetDescendants()) do
+                    if child:IsA("TextLabel") and (child.Name == "Stock_Text" or child.Name == "STOCK_TEXT") then
+                        local stockText = child.Text:match("%d+") or "0"
+                        data[obj.Name] = stockText
+                        itemCount = itemCount + 1
+                        print("🛍️ EventShop Method 2 - " .. obj.Name .. " = " .. stockText)
+                        break
+                    end
+                end
+            end
+        end
+        
+        print("✅ EventShop_UI Method 2 found " .. itemCount .. " items")
+        return data
+    end)
+    
+    if success2 and result then
+        return result
+    else
+        print("❌ Both EventShop_UI methods failed")
+        return {}
+    end
+end
+
+-- CLEAN HONEY EVENT COLLECTION
+local function collectHoneyEventData()
+    local success, honeyEventNames = pcall(function() 
+        return getAvailableItems("HoneyEventShop_UI") 
+    end)
+    
+    if success and #honeyEventNames > 0 then
+        local data = {}
+        for _, name in ipairs(honeyEventNames) do
+            data[name] = getStock(name, "HoneyEventShop_UI")
+        end
+        return data
+    end
+    
+    -- Alternative method
+    local success2, result = pcall(function()
+        local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild("HoneyEventShop_UI")
+        if not shopUI then return {} end
+        
+        local data = {}
+        for _, obj in ipairs(shopUI:GetDescendants()) do
+            if obj:IsA("Frame") and not shouldIgnoreItem(obj.Name) then
+                for _, child in ipairs(obj:GetDescendants()) do
+                    if child:IsA("TextLabel") and child.Name == "Stock_Text" then
+                        data[obj.Name] = tostring(tonumber(child.Text:match("%d+")) or 0)
+                        break
+                    end
+                end
+            end
+        end
+        return data
+    end)
+    
+    return (success2 and result) or {}
+end
+
+-- COLLECT ALL DATA - ADDED EVENTSHOP SUPPORT
+local function collectAllData()
+    -- ALWAYS collect fresh egg data every time
+    local freshEggs = collectEggData()
+    
+    local data = {
+        sessionId = Cache.sessionId,
+        timestamp = os.time(),
+        updateNumber = Cache.updateCounter + 1,
+        playerName = game.Players.LocalPlayer.Name,
+        userId = game.Players.LocalPlayer.UserId,
+        
+        weather = {
+            type = Cache.currentWeather,
+            duration = Cache.weatherDuration
+        },
+        
+        eggs = freshEggs,  -- ALWAYS use fresh egg data
+        seeds = {}, gear = {}, event = {}, cosmetic = {}, nightevent = {}, honeyevent = {}, eventshop = {}
+    }
+    
+    -- Collect shop data - UPDATED WITH EVENTSHOP
+    local shops = {
+        {name = "seeds", ui = "Seed_Shop"},
+        {name = "gear", ui = "Gear_Shop"},
+        {name = "event", ui = "EventShop_UI"},  -- This is the OLD event shop
+        {name = "cosmetic", ui = "CosmeticShop_UI"},
+        {name = "nightevent", ui = "NightEventShop_UI"}
+    }
+    
+    for _, shop in ipairs(shops) do
+        local items = getAvailableItems(shop.ui)
+        for _, item in ipairs(items) do
+            data[shop.name][item] = getStock(item, shop.ui)
+        end
+    end
+    
+    -- Special collections
+    data.honeyevent = collectHoneyEventData()
+    data.eventshop = collectEventShopData()  -- NEW EVENTSHOP_UI DATA
+    
+    return data
+end
+
+-- SEND TO API
+local function sendToAPI(data)
+    local success = pcall(function()
+        Cache.updateCounter = Cache.updateCounter + 1
+        data.updateNumber = Cache.updateCounter
+        
+        local jsonStr = game:GetService("HttpService"):JSONEncode(data)
+        
+        request({
+            Url = API_ENDPOINT .. "?session=" .. Cache.sessionId .. "&t=" .. os.time(),
+            Method = "POST",
+            Headers = {
+                ["Content-Type"] = "application/json",
+                ["Authorization"] = API_KEY,
+                ["Cache-Control"] = "no-cache, no-store, must-revalidate",
+                ["X-Session-ID"] = Cache.sessionId,
+                ["X-Update-Number"] = tostring(Cache.updateCounter)
+            },
+            Body = jsonStr
+        })
+    end)
+    
+    return success
+end
+
+-- HEARTBEAT
+local function sendHeartbeat()
+    pcall(function()
+        request({
+            Url = API_ENDPOINT .. "/heartbeat",
+            Method = "POST",
+            Headers = {
+                ["Authorization"] = API_KEY,
+                ["X-Session-ID"] = Cache.sessionId
+            },
+            Body = game:GetService("HttpService"):JSONEncode({
+                sessionId = Cache.sessionId,
+                status = "ALIVE",
+                timestamp = os.time()
+            })
+        })
+    end)
+end
+
+-- CHANGE DETECTION - UPDATED WITH EVENTSHOP
+local function hasChanges(oldData, newData)
+    -- Weather check
+    if oldData.weather.type ~= newData.weather.type then return true end
+    
+    -- Egg check - compare all eggs properly
+    if #oldData.eggs ~= #newData.eggs then 
+        print("🥚 Egg count changed: " .. #oldData.eggs .. " -> " .. #newData.eggs)
+        return true 
+    end
+    
+    -- Create egg lookup tables for proper comparison
+    local oldEggLookup = {}
+    for _, egg in ipairs(oldData.eggs) do
+        oldEggLookup[egg.name] = egg.quantity
+    end
+    
+    local newEggLookup = {}
+    for _, egg in ipairs(newData.eggs) do
+        newEggLookup[egg.name] = egg.quantity
+    end
+    
+    -- Check for egg changes
+    for eggName, newQuantity in pairs(newEggLookup) do
+        local oldQuantity = oldEggLookup[eggName] or 0
+        if oldQuantity ~= newQuantity then
+            print("🥚 Egg change: " .. eggName .. " changed from " .. oldQuantity .. " to " .. newQuantity)
+            return true
+        end
+    end
+    
+    -- Check for removed eggs
+    for eggName, oldQuantity in pairs(oldEggLookup) do
+        if not newEggLookup[eggName] then
+            print("🥚 Egg removed: " .. eggName)
+            return true
+        end
+    end
+    
+    -- Check all shops - ADDED EVENTSHOP
+    local shopTypes = {"seeds", "gear", "event", "cosmetic", "nightevent", "honeyevent", "eventshop"}
+    for _, shopType in ipairs(shopTypes) do
+        for itemName, newStock in pairs(newData[shopType]) do
+            if oldData[shopType][itemName] ~= newStock then 
+                print("🛍️ " .. shopType .. " change: " .. itemName .. " = " .. newStock)
+                return true 
+            end
+        end
+    end
+    
+    return false
+end
+
+-- SETUP CRASH DETECTION - CLIENT-SIDE ONLY
+local function setupCrashDetection()
+    game.Players.LocalPlayer.AncestryChanged:Connect(function()
+        if not game.Players.LocalPlayer.Parent then
+            autoDeleteOnCrash()
+        end
+    end)
+    
+    local UserInputService = game:GetService("UserInputService")
+    UserInputService.WindowFocusReleased:Connect(function()
+        sendHeartbeat()
+    end)
+end
+
+-- ANTI-AFK
+local function setupAntiAFK()
+    local VirtualUser = game:GetService("VirtualUser")
+    game.Players.LocalPlayer.Idled:Connect(function()
+        VirtualUser:CaptureController()
+        VirtualUser:ClickButton2(Vector2.new())
+    end)
+end
+
+-- WEATHER LISTENER
+local function setupWeatherListener()
+    pcall(function()
+        game.ReplicatedStorage.GameEvents.WeatherEventStarted.OnClientEvent:Connect(function(weatherType, duration)
+            Cache.currentWeather = weatherType or "None"
+            Cache.weatherDuration = duration or 0
+        end)
+    end)
+end
+
+-- MAIN FUNCTION
+local function startCleanMonitoring()
+    print("🔥 Clean Monitor Started | Session: " .. Cache.sessionId)
+    print("🥚 REAL-TIME EGG UPDATES - Eggs refresh every second")
+    print("🛍️ NEW EVENTSHOP_UI SUPPORT - Dual method detection")
+    
+    sendToDiscord("🔥 Clean monitor started - WITH EVENTSHOP_UI SUPPORT\nSession: " .. Cache.sessionId, false)
+    
+    setupAntiAFK()
+    setupWeatherListener()
+    setupCrashDetection()
+    
+    -- Initial data collection
+    local initialData = collectAllData()
+    
+    -- Store initial cache - ADDED EVENTSHOP
+    Cache.seeds = initialData.seeds
+    Cache.gear = initialData.gear
+    Cache.event = initialData.event
+    Cache.cosmetic = initialData.cosmetic
+    Cache.nightevent = initialData.nightevent
+    Cache.honeyevent = initialData.honeyevent
+    Cache.eventshop = initialData.eventshop  -- NEW CACHE
+    Cache.eggs = initialData.eggs
+    
+    Cache.lastHeartbeat = os.time()
+    Cache.lastDiscordUpdate = os.time()
+    
+    sendToAPI(initialData)
+    sendHeartbeat()
+    
+    print("🚀 Starting main monitoring loop with EventShop_UI support...")
+    
+    -- MAIN LOOP - EGGS UPDATE EVERY SECOND
+    while true do
+        local success, currentData = pcall(collectAllData)
+        
+        if success then
+            local currentTime = os.time()
             
-            -- Use tool multiple times with movement
-            for i = 1, math.random(2, 5) do
-                tool:Activate()
-                task.wait(math.random(0.5, 1.5))
+            -- Create old data for comparison - ADDED EVENTSHOP
+            local oldData = {
+                weather = {type = Cache.currentWeather, duration = Cache.weatherDuration},
+                eggs = Cache.eggs,
+                seeds = Cache.seeds, gear = Cache.gear, event = Cache.event,
+                cosmetic = Cache.cosmetic, nightevent = Cache.nightevent, 
+                honeyevent = Cache.honeyevent, eventshop = Cache.eventshop
+            }
+            
+            -- Check for changes
+            local changes = hasChanges(oldData, currentData)
+            
+            -- Send update every second (eggs are always fresh)
+            if sendToAPI(currentData) then
+                -- Update cache with new data - ADDED EVENTSHOP
+                Cache.seeds = currentData.seeds
+                Cache.gear = currentData.gear
+                Cache.event = currentData.event
+                Cache.cosmetic = currentData.cosmetic
+                Cache.nightevent = currentData.nightevent
+                Cache.honeyevent = currentData.honeyevent
+                Cache.eventshop = currentData.eventshop  -- UPDATE EVENTSHOP CACHE
+                Cache.eggs = currentData.eggs
                 
-                -- Sometimes move while using tool
-                if math.random() > 0.5 then
-                    local humanoid = character:FindFirstChild("Humanoid")
-                    local rootPart = character:FindFirstChild("HumanoidRootPart")
-                    if humanoid and rootPart then
-                        local moveDir = getRandomWalkDirection()
-                        humanoid:MoveTo(rootPart.Position + moveDir * 0.3)
+                -- Log changes
+                if changes then
+                    print("📊 Update #" .. Cache.updateCounter .. " (Changes detected)")
+                    
+                    -- Log counts for debugging
+                    local eggCount = #currentData.eggs
+                    local eventShopCount = 0
+                    for _ in pairs(currentData.eventshop) do eventShopCount = eventShopCount + 1 end
+                    
+                    if eggCount > 0 then
+                        print("🥚 Current eggs: " .. eggCount .. " types")
+                    end
+                    if eventShopCount > 0 then
+                        print("🛍️ EventShop items: " .. eventShopCount)
                     end
                 end
             end
             
-            -- Keep tool equipped for a bit longer
-            task.wait(math.random(3, 8))
+            -- Heartbeat every 10 seconds
+            if (currentTime - Cache.lastHeartbeat) >= HEARTBEAT_INTERVAL then
+                sendHeartbeat()
+                Cache.lastHeartbeat = currentTime
+            end
             
-            -- Sometimes unequip, sometimes keep it
-            if math.random() > 0.3 then
-                humanoid:UnequipTools()
-                log("DEBUG", "Unequipped " .. tool.Name)
-            else
-                log("DEBUG", "Keeping " .. tool.Name .. " equipped")
+            -- Discord update every 5 minutes
+            if (currentTime - Cache.lastDiscordUpdate) >= DISCORD_UPDATE_INTERVAL then
+                local eggCount = #Cache.eggs
+                local eventShopCount = 0
+                for _ in pairs(Cache.eventshop) do eventShopCount = eventShopCount + 1 end
+                
+                sendToDiscord("📊 Monitor running - Update #" .. Cache.updateCounter .. "\n🥚 Tracking " .. eggCount .. " egg types\n🛍️ EventShop: " .. eventShopCount .. " items", false)
+                Cache.lastDiscordUpdate = currentTime
             end
-        end
-    end)
-    
-    return true
-end
-
-local function emergencyAntiAfk()
-    log("WARN", "Emergency Anti-AFK activated!")
-    notify("Anti-AFK", "Emergency mode activated!", 8)
-    
-    -- Perform multiple actions rapidly
-    for i = 1, 3 do
-        performComplexMovement()
-        task.wait(1)
-        useToolAdvanced()
-        task.wait(2)
-    end
-    
-    -- Reset activity timer
-    State.lastActivity = os.time()
-    State.emergencyMode = false
-    log("INFO", "Emergency Anti-AFK completed")
-end
-
-local function performAntiAfk()
-    local currentTime = os.time()
-    
-    -- Check for emergency mode (18+ minutes of inactivity)
-    if currentTime - State.lastActivity >= CONFIG.EMERGENCY_AFK_TIME then
-        State.emergencyMode = true
-        emergencyAntiAfk()
-        return
-    end
-    
-    -- Regular anti-AFK check
-    if currentTime < State.nextAntiAfk then return end
-    
-    log("INFO", "Performing enhanced anti-AFK...")
-    
-    -- Perform complex movement
-    task.spawn(function()
-        performComplexMovement()
-    end)
-    
-    -- Use tools after movement
-    task.spawn(function()
-        task.wait(math.random(2, 5))
-        if math.random() <= CONFIG.TOOL_USE_CHANCE then
-            useToolAdvanced()
-        end
-    end)
-    
-    -- Update activity tracking
-    State.lastActivity = currentTime
-    State.lastAntiAfk = currentTime
-    
-    -- Set next anti-AFK time
-    local nextInterval = math.random(CONFIG.ANTI_AFK_MIN_INTERVAL, CONFIG.ANTI_AFK_MAX_INTERVAL)
-    State.nextAntiAfk = currentTime + nextInterval
-    
-    local timeUntilEmergency = CONFIG.EMERGENCY_AFK_TIME - (currentTime - State.lastActivity)
-    log("INFO", string.format("Next anti-AFK: %ds | Emergency in: %ds", 
-        nextInterval, math.max(0, timeUntilEmergency)))
-end
-
--- Utility Functions
-local function generateStockHash(stockData)
-    local hashString = ""
-    for stockType, fruits in pairs(stockData) do
-        if fruits then
-            for _, fruit in pairs(fruits) do
-                if fruit and fruit.OnSale then
-                    hashString = hashString .. tostring(fruit.Name) .. tostring(fruit.Price)
-                end
-            end
-        end
-    end
-    return hashString
-end
-
-local function formatFruitData(fruits)
-    local formattedFruits = {}
-    if not fruits then return formattedFruits end
-    
-    for _, fruit in pairs(fruits) do
-        if fruit and fruit.OnSale and fruit.Name and fruit.Price then
-            table.insert(formattedFruits, {
-                name = tostring(fruit.Name),
-                price = tonumber(fruit.Price),
-                onSale = true
-            })
-        end
-    end
-    return formattedFruits
-end
-
--- Client-side HTTP Request Function
-local function makeAPIRequest(method, data)
-    local success, response = pcall(function()
-        local requestData = {
-            Url = CONFIG.API_URL,
-            Method = method or "GET",
-            Headers = {
-                ["Authorization"] = CONFIG.AUTH_HEADER,
-                ["Content-Type"] = "application/json",
-                ["X-Session-ID"] = CONFIG.SESSION_ID
-            }
-        }
-        
-        if data and (method == "POST" or method == "PUT") then
-            requestData.Body = HttpService:JSONEncode(data)
-        end
-        
-        local request = http_request or request or syn and syn.request
-        if not request then
-            log("ERROR", "No HTTP request function available")
-            return nil
-        end
-        
-        return request(requestData)
-    end)
-    
-    if success and response then
-        if response.StatusCode and response.StatusCode >= 200 and response.StatusCode < 300 then
-            State.retryCount = 0
-            return true, response.Body
-        else
-            log("ERROR", "API request failed - Status: " .. tostring(response.StatusCode or "Unknown"))
-            return false, response.Body
-        end
-    else
-        log("ERROR", "HTTP request failed: " .. tostring(response))
-        return false, nil
-    end
-end
-
-local function sendStockData(stockData)
-    local normalStock = formatFruitData(stockData.normal)
-    local mirageStock = formatFruitData(stockData.mirage)
-    
-    local payload = {
-        sessionId = CONFIG.SESSION_ID,
-        timestamp = os.time(),
-        normalStock = normalStock,
-        mirageStock = mirageStock,
-        playerName = Players.LocalPlayer.Name,
-        serverId = game.JobId or "unknown",
-        totalFruits = #normalStock + #mirageStock,
-        antiAfkActive = true
-    }
-    
-    local success, responseBody = makeAPIRequest("POST", payload)
-    
-    if success then
-        State.totalUpdates = State.totalUpdates + 1
-        log("INFO", string.format("Stock sent - Normal: %d, Mirage: %d", #normalStock, #mirageStock))
-        return true
-    else
-        State.retryCount = State.retryCount + 1
-        log("WARN", string.format("Send failed (%d/%d)", State.retryCount, CONFIG.MAX_RETRIES))
-        
-        if State.retryCount >= CONFIG.MAX_RETRIES then
-            log("ERROR", "Max retries reached - stopping")
-            State.isRunning = false
-        end
-        return false
-    end
-end
-
-local function cleanupSession()
-    if not State.sessionActive then return end
-    
-    log("INFO", "Cleaning up session...")
-    pcall(function()
-        makeAPIRequest("DELETE", {
-            sessionId = CONFIG.SESSION_ID,
-            reason = "client_disconnect"
-        })
-    end)
-    State.sessionActive = false
-end
-
--- Game Data Functions
-local function getFruitStock()
-    local success, result = pcall(function()
-        local remotes = ReplicatedStorage:WaitForChild("Remotes", 10)
-        if not remotes then
-            error("Remotes not found")
-        end
-        
-        local CommF = remotes:WaitForChild("CommF_", 10)
-        if not CommF then
-            error("CommF_ not found")
-        end
-        
-        return {
-            normal = CommF:InvokeServer("GetFruits", false),
-            mirage = CommF:InvokeServer("GetFruits", true)
-        }
-    end)
-    
-    if success and result then
-        return result
-    else
-        log("ERROR", "Failed to get stock: " .. tostring(result))
-        return nil
-    end
-end
-
--- Client-side Features
-local function setupClientFeatures()
-    -- Initialize anti-AFK timing
-    local currentTime = os.time()
-    State.lastActivity = currentTime
-    State.nextAntiAfk = currentTime + math.random(CONFIG.ANTI_AFK_MIN_INTERVAL, CONFIG.ANTI_AFK_MAX_INTERVAL)
-    log("INFO", "Enhanced Anti-AFK system initialized")
-    
-    -- Handle teleport failures
-    pcall(function()
-        Players.LocalPlayer.OnTeleport:Connect(function(state)
-            if state == Enum.TeleportState.Failed then
-                log("WARN", "Teleport failed - rejoining...")
-                cleanupSession()
-                task.wait(3)
-                TeleportService:Teleport(game.PlaceId, Players.LocalPlayer)
-            end
-        end)
-    end)
-    
-    -- Window focus optimization
-    pcall(function()
-        UserInputService.WindowFocusReleased:Connect(function()
-            RunService:Set3dRenderingEnabled(false)
-        end)
-        
-        UserInputService.WindowFocused:Connect(function()
-            RunService:Set3dRenderingEnabled(true)
-        end)
-    end)
-end
-
--- Client-side Cleanup
-local function setupCleanupHandlers()
-    local heartbeatConnection
-    heartbeatConnection = RunService.Heartbeat:Connect(function()
-        if not game:IsLoaded() or not Players.LocalPlayer.Parent then
-            log("WARN", "Disconnected - cleaning up")
-            cleanupSession()
-            if heartbeatConnection then
-                heartbeatConnection:Disconnect()
-            end
-        end
-    end)
-    
-    pcall(function()
-        Players.PlayerRemoving:Connect(function(player)
-            if player == Players.LocalPlayer then
-                cleanupSession()
-            end
-        end)
-    end)
-end
-
--- Main Loop
-local function startMonitoring()
-    State.isRunning = true
-    State.lastUpdate = os.time()
-    
-    log("INFO", "Enhanced Stock Monitor with Advanced Anti-AFK started")
-    log("INFO", "Player: " .. Players.LocalPlayer.Name)
-    notify("Stock Monitor", "Enhanced Anti-AFK Active!", 5)
-    
-    local success, _ = makeAPIRequest("GET")
-    if success then
-        log("INFO", "API connected")
-    else
-        log("WARN", "API connection failed")
-    end
-    
-    local updateCount = 0
-    
-    while State.isRunning do
-        -- Perform enhanced anti-AFK check
-        performAntiAfk()
-        
-        -- Get and send stock data
-        local stockData = getFruitStock()
-        
-        if stockData then
-            local currentHash = generateStockHash(stockData)
-            local timeSinceUpdate = os.time() - State.lastUpdate
             
-            if currentHash ~= State.lastStockHash or timeSinceUpdate >= 60 then
-                if sendStockData(stockData) then
-                    State.lastStockHash = currentHash
-                    State.lastUpdate = os.time()
-                end
-            else
-                log("DEBUG", "No changes detected")
-            end
         else
-            log("WARN", "Could not get stock data")
+            print("❌ Error in main loop:", currentData)
+            autoDeleteOnCrash()
+            break
         end
         
-        updateCount = updateCount + 1
-        if updateCount >= 6 then
-            local nextAfkIn = State.nextAntiAfk - os.time()
-            local timeSinceActivity = os.time() - State.lastActivity
-            log("INFO", string.format("Updates: %d | Next Anti-AFK: %ds | Activity: %ds ago", 
-                State.totalUpdates, math.max(0, nextAfkIn), timeSinceActivity))
-            updateCount = 0
-        end
-        
-        task.wait(CONFIG.UPDATE_INTERVAL)
+        wait(CHECK_INTERVAL)
     end
-    
-    log("INFO", "Monitor stopped")
-    cleanupSession()
 end
 
--- Initialize
-local function initialize()
-    log("INFO", "Initializing Enhanced Stock Monitor...")
-    
-    if not ReplicatedStorage:FindFirstChild("Remotes") then
-        log("ERROR", "Not in Blox Fruits game!")
-        notify("Error", "Wrong game!", 10)
-        return
-    end
-    
-    setupClientFeatures()
-    setupCleanupHandlers()
-    
-    task.spawn(startMonitoring)
-end
-
--- Manual controls
-_G.StockMonitor = {
-    stop = function()
-        State.isRunning = false
-        log("INFO", "Manually stopped")
-    end,
-    
-    restart = function()
-        State.isRunning = false
-        task.wait(2)
-        initialize()
-    end,
-    
-    status = function()
-        local timeSinceActivity = os.time() - State.lastActivity
-        local nextAfkIn = State.nextAntiAfk - os.time()
-        
-        print("Running:", State.isRunning)
-        print("Updates:", State.totalUpdates)
-        print("Time since activity:", timeSinceActivity, "seconds")
-        print("Next Anti-AFK in:", math.max(0, nextAfkIn), "seconds")
-        print("Emergency mode:", State.emergencyMode)
-        print("Session:", CONFIG.SESSION_ID:sub(1, 8))
-        return State
-    end,
-    
-    forceAntiAfk = function()
-        State.nextAntiAfk = 0
-        log("INFO", "Forced anti-AFK trigger")
-    end,
-    
-    emergencyTest = function()
-        emergencyAntiAfk()
-        log("INFO", "Emergency anti-AFK test completed")
-    end
-}
-
--- Start everything
-initialize()
-log("INFO", "Enhanced Anti-AFK prevents 20min kick!")
-log("INFO", "Use _G.StockMonitor.emergencyTest() to test emergency mode")
+-- START CLEAN MONITORING
+startCleanMonitoring()
