@@ -1,5 +1,5 @@
--- CLEAN REAL-TIME MONITOR - WITH NEW EVENTSHOP_UI SUPPORT
-print("🔥 Clean Real-Time Monitor Starting - WITH EVENTSHOP_UI SUPPORT...")
+-- CLEAN REAL-TIME MONITOR - MINIMAL LOGGING VERSION
+print("🔥 Starting Clean Monitor...")
 
 -- Configuration
 local API_ENDPOINT = "https://groweas.vercel.app/api/data"
@@ -18,10 +18,7 @@ local Cache = {
     lastDiscordUpdate = 0,
     currentWeather = "None",
     weatherDuration = 0,
-    
-    -- Stock caches - ADDED EVENTSHOP
-    seeds = {}, gear = {}, event = {}, cosmetic = {}, nightevent = {}, honeyevent = {}, eventshop = {},
-    eggs = {}
+    seeds = {}, gear = {}, event = {}, cosmetic = {}, nightevent = {}, honeyevent = {}, eggs = {}
 }
 
 -- UI element patterns to ignore
@@ -30,7 +27,6 @@ local IGNORE_PATTERNS = {
     "uicorner", "uistroke", "uigradient", "uiaspectratioconstraint"
 }
 
--- Check if item should be ignored
 local function shouldIgnoreItem(itemName)
     local lowerName = string.lower(itemName)
     for _, pattern in ipairs(IGNORE_PATTERNS) do
@@ -63,13 +59,6 @@ end
 -- AUTO-DELETE function
 local function autoDeleteOnCrash()
     pcall(function()
-        local deleteData = {
-            action = "DELETE_ALL",
-            sessionId = Cache.sessionId,
-            playerName = game.Players.LocalPlayer.Name,
-            timestamp = os.time()
-        }
-        
         request({
             Url = DELETE_ENDPOINT,
             Method = "POST",
@@ -78,18 +67,18 @@ local function autoDeleteOnCrash()
                 ["Authorization"] = API_KEY,
                 ["X-Session-ID"] = Cache.sessionId
             },
-            Body = game:GetService("HttpService"):JSONEncode(deleteData)
+            Body = game:GetService("HttpService"):JSONEncode({
+                action = "DELETE_ALL",
+                sessionId = Cache.sessionId,
+                playerName = game.Players.LocalPlayer.Name,
+                timestamp = os.time()
+            })
         })
-        
-        sendToDiscord("🗑️ Auto-delete triggered - Data removed from API", true)
     end)
 end
 
--- COLLECT ALL EGGS - REAL-TIME UPDATES
+-- COLLECT EGGS - SIMPLE & FAST
 local function collectEggData()
-    local eggs = {}
-    local eggCounts = {}
-    
     local success, result = pcall(function()
         local NPCs = workspace:FindFirstChild("NPCS")
         if not NPCs then return {} end
@@ -97,29 +86,18 @@ local function collectEggData()
         local PetStand = NPCs:FindFirstChild("Pet Stand")
         if not PetStand then return {} end
         
-        -- Try ALL possible egg location folder names
-        local possibleNames = {
-            "EggLocations", "Egg Locations", "Eggs", "EggLocation", 
-            "Egg_Locations", "EggModels", "Egg Models", "PetEggs"
-        }
-        
-        local EggLocations = nil
-        for _, name in ipairs(possibleNames) do
-            EggLocations = PetStand:FindFirstChild(name)
-            if EggLocations then
-                break
-            end
-        end
-        
+        local EggLocations = PetStand:FindFirstChild("EggLocations") or 
+                            PetStand:FindFirstChild("Egg Locations") or 
+                            PetStand:FindFirstChild("Eggs")
         if not EggLocations then return {} end
         
-        -- Count EVERY model in the egg folder (no filtering)
+        local eggCounts = {}
         for _, eggModel in pairs(EggLocations:GetChildren()) do
             local eggName = eggModel.Name
             eggCounts[eggName] = (eggCounts[eggName] or 0) + 1
         end
         
-        -- Convert ALL eggs to array format
+        local eggs = {}
         for eggName, count in pairs(eggCounts) do
             table.insert(eggs, {name = eggName, quantity = count})
         end
@@ -130,7 +108,7 @@ local function collectEggData()
     return (success and result) or {}
 end
 
--- CLEAN STOCK GETTER
+-- GET STOCK
 local function getStock(item, shopName)
     local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild(shopName)
     if not shopUI then return "0" end
@@ -147,7 +125,7 @@ local function getStock(item, shopName)
     return "0"
 end
 
--- CLEAN ITEM GETTER
+-- GET ITEMS
 local function getAvailableItems(shopName)
     local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild(shopName)
     if not shopUI then return {} end
@@ -167,7 +145,6 @@ local function getAvailableItems(shopName)
 
     local names = {}
     
-    -- Special handling for cosmetic shop
     if shopName == "CosmeticShop_UI" then
         for _, segment in pairs(scrollFrame:GetChildren()) do
             if segment:IsA("Frame") and (segment.Name == "TopSegment" or segment.Name == "BottomSegment") then
@@ -189,69 +166,7 @@ local function getAvailableItems(shopName)
     return names
 end
 
--- NEW EVENTSHOP_UI COLLECTION - DUAL METHOD APPROACH
-local function collectEventShopData()
-    print("🛍️ Collecting EventShop_UI data...")
-    
-    -- Method 1: Standard approach
-    local success1, eventShopNames = pcall(function() 
-        return getAvailableItems("EventShop_UI") 
-    end)
-    
-    if success1 and #eventShopNames > 0 then
-        print("✅ EventShop_UI Method 1 worked - Found " .. #eventShopNames .. " items")
-        local data = {}
-        for _, name in ipairs(eventShopNames) do
-            local stock = getStock(name, "EventShop_UI")
-            data[name] = stock
-            print("🛍️ EventShop item: " .. name .. " = " .. stock)
-        end
-        return data
-    else
-        print("❌ EventShop_UI Method 1 failed, trying Method 2...")
-    end
-    
-    -- Method 2: Alternative deep scan approach
-    local success2, result = pcall(function()
-        local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild("EventShop_UI")
-        if not shopUI then 
-            print("❌ EventShop_UI not found in PlayerGui")
-            return {} 
-        end
-        
-        print("✅ Found EventShop_UI, scanning structure...")
-        local data = {}
-        local itemCount = 0
-        
-        -- Deep scan for all frames with stock text
-        for _, obj in ipairs(shopUI:GetDescendants()) do
-            if obj:IsA("Frame") and not shouldIgnoreItem(obj.Name) then
-                -- Look for stock text in this frame
-                for _, child in ipairs(obj:GetDescendants()) do
-                    if child:IsA("TextLabel") and (child.Name == "Stock_Text" or child.Name == "STOCK_TEXT") then
-                        local stockText = child.Text:match("%d+") or "0"
-                        data[obj.Name] = stockText
-                        itemCount = itemCount + 1
-                        print("🛍️ EventShop Method 2 - " .. obj.Name .. " = " .. stockText)
-                        break
-                    end
-                end
-            end
-        end
-        
-        print("✅ EventShop_UI Method 2 found " .. itemCount .. " items")
-        return data
-    end)
-    
-    if success2 and result then
-        return result
-    else
-        print("❌ Both EventShop_UI methods failed")
-        return {}
-    end
-end
-
--- CLEAN HONEY EVENT COLLECTION
+-- HONEY EVENT DATA
 local function collectHoneyEventData()
     local success, honeyEventNames = pcall(function() 
         return getAvailableItems("HoneyEventShop_UI") 
@@ -265,7 +180,6 @@ local function collectHoneyEventData()
         return data
     end
     
-    -- Alternative method
     local success2, result = pcall(function()
         local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild("HoneyEventShop_UI")
         if not shopUI then return {} end
@@ -287,9 +201,8 @@ local function collectHoneyEventData()
     return (success2 and result) or {}
 end
 
--- COLLECT ALL DATA - ADDED EVENTSHOP SUPPORT
+-- COLLECT ALL DATA WITH MAIN LOGGING
 local function collectAllData()
-    -- ALWAYS collect fresh egg data every time
     local freshEggs = collectEggData()
     
     local data = {
@@ -298,35 +211,54 @@ local function collectAllData()
         updateNumber = Cache.updateCounter + 1,
         playerName = game.Players.LocalPlayer.Name,
         userId = game.Players.LocalPlayer.UserId,
-        
-        weather = {
-            type = Cache.currentWeather,
-            duration = Cache.weatherDuration
-        },
-        
-        eggs = freshEggs,  -- ALWAYS use fresh egg data
-        seeds = {}, gear = {}, event = {}, cosmetic = {}, nightevent = {}, honeyevent = {}, eventshop = {}
+        weather = {type = Cache.currentWeather, duration = Cache.weatherDuration},
+        eggs = freshEggs,
+        seeds = {}, gear = {}, event = {}, cosmetic = {}, nightevent = {}, honeyevent = {}
     }
     
-    -- Collect shop data - UPDATED WITH EVENTSHOP
+    -- MAIN LOGGING - WHAT WE FOUND
+    local foundData = {}
+    
+    -- Check eggs
+    if #freshEggs > 0 then
+        foundData.eggs = #freshEggs .. " types"
+    else
+        foundData.eggs = "NONE"
+    end
+    
+    -- Check shops
     local shops = {
-        {name = "seeds", ui = "Seed_Shop"},
-        {name = "gear", ui = "Gear_Shop"},
-        {name = "event", ui = "EventShop_UI"},  -- This is the OLD event shop
-        {name = "cosmetic", ui = "CosmeticShop_UI"},
-        {name = "nightevent", ui = "NightEventShop_UI"}
+        {name = "seeds", ui = "Seed_Shop", display = "Seeds"},
+        {name = "gear", ui = "Gear_Shop", display = "Gear"},
+        {name = "event", ui = "EventShop_UI", display = "Event"},
+        {name = "cosmetic", ui = "CosmeticShop_UI", display = "Cosmetic"},
+        {name = "nightevent", ui = "NightEventShop_UI", display = "Night"}
     }
     
     for _, shop in ipairs(shops) do
         local items = getAvailableItems(shop.ui)
-        for _, item in ipairs(items) do
-            data[shop.name][item] = getStock(item, shop.ui)
+        if #items > 0 then
+            for _, item in ipairs(items) do
+                data[shop.name][item] = getStock(item, shop.ui)
+            end
+            foundData[shop.display] = #items .. " items"
+        else
+            foundData[shop.display] = "NONE"
         end
     end
     
-    -- Special collections
+    -- Check honey event
     data.honeyevent = collectHoneyEventData()
-    data.eventshop = collectEventShopData()  -- NEW EVENTSHOP_UI DATA
+    local honeyCount = 0
+    for _ in pairs(data.honeyevent) do honeyCount = honeyCount + 1 end
+    foundData.Honey = honeyCount > 0 and honeyCount .. " items" or "NONE"
+    
+    -- LOG WHAT WE FOUND
+    local logParts = {}
+    for shopName, result in pairs(foundData) do
+        table.insert(logParts, shopName .. ":" .. result)
+    end
+    print("📊 DATA FOUND: " .. table.concat(logParts, " | "))
     
     return data
 end
@@ -336,8 +268,6 @@ local function sendToAPI(data)
     local success = pcall(function()
         Cache.updateCounter = Cache.updateCounter + 1
         data.updateNumber = Cache.updateCounter
-        
-        local jsonStr = game:GetService("HttpService"):JSONEncode(data)
         
         request({
             Url = API_ENDPOINT .. "?session=" .. Cache.sessionId .. "&t=" .. os.time(),
@@ -349,9 +279,15 @@ local function sendToAPI(data)
                 ["X-Session-ID"] = Cache.sessionId,
                 ["X-Update-Number"] = tostring(Cache.updateCounter)
             },
-            Body = jsonStr
+            Body = game:GetService("HttpService"):JSONEncode(data)
         })
     end)
+    
+    if success then
+        print("✅ API UPDATE #" .. Cache.updateCounter)
+    else
+        print("❌ API FAILED #" .. Cache.updateCounter)
+    end
     
     return success
 end
@@ -362,10 +298,7 @@ local function sendHeartbeat()
         request({
             Url = API_ENDPOINT .. "/heartbeat",
             Method = "POST",
-            Headers = {
-                ["Authorization"] = API_KEY,
-                ["X-Session-ID"] = Cache.sessionId
-            },
+            Headers = {["Authorization"] = API_KEY, ["X-Session-ID"] = Cache.sessionId},
             Body = game:GetService("HttpService"):JSONEncode({
                 sessionId = Cache.sessionId,
                 status = "ALIVE",
@@ -375,74 +308,40 @@ local function sendHeartbeat()
     end)
 end
 
--- CHANGE DETECTION - UPDATED WITH EVENTSHOP
+-- CHANGE DETECTION
 local function hasChanges(oldData, newData)
-    -- Weather check
     if oldData.weather.type ~= newData.weather.type then return true end
     
-    -- Egg check - compare all eggs properly
-    if #oldData.eggs ~= #newData.eggs then 
-        print("🥚 Egg count changed: " .. #oldData.eggs .. " -> " .. #newData.eggs)
-        return true 
-    end
+    if #oldData.eggs ~= #newData.eggs then return true end
     
-    -- Create egg lookup tables for proper comparison
     local oldEggLookup = {}
     for _, egg in ipairs(oldData.eggs) do
         oldEggLookup[egg.name] = egg.quantity
     end
     
-    local newEggLookup = {}
     for _, egg in ipairs(newData.eggs) do
-        newEggLookup[egg.name] = egg.quantity
+        if oldEggLookup[egg.name] ~= egg.quantity then return true end
     end
     
-    -- Check for egg changes
-    for eggName, newQuantity in pairs(newEggLookup) do
-        local oldQuantity = oldEggLookup[eggName] or 0
-        if oldQuantity ~= newQuantity then
-            print("🥚 Egg change: " .. eggName .. " changed from " .. oldQuantity .. " to " .. newQuantity)
-            return true
-        end
-    end
-    
-    -- Check for removed eggs
-    for eggName, oldQuantity in pairs(oldEggLookup) do
-        if not newEggLookup[eggName] then
-            print("🥚 Egg removed: " .. eggName)
-            return true
-        end
-    end
-    
-    -- Check all shops - ADDED EVENTSHOP
-    local shopTypes = {"seeds", "gear", "event", "cosmetic", "nightevent", "honeyevent", "eventshop"}
+    local shopTypes = {"seeds", "gear", "event", "cosmetic", "nightevent", "honeyevent"}
     for _, shopType in ipairs(shopTypes) do
         for itemName, newStock in pairs(newData[shopType]) do
-            if oldData[shopType][itemName] ~= newStock then 
-                print("🛍️ " .. shopType .. " change: " .. itemName .. " = " .. newStock)
-                return true 
-            end
+            if oldData[shopType][itemName] ~= newStock then return true end
         end
     end
     
     return false
 end
 
--- SETUP CRASH DETECTION - CLIENT-SIDE ONLY
+-- SETUP FUNCTIONS
 local function setupCrashDetection()
     game.Players.LocalPlayer.AncestryChanged:Connect(function()
         if not game.Players.LocalPlayer.Parent then
             autoDeleteOnCrash()
         end
     end)
-    
-    local UserInputService = game:GetService("UserInputService")
-    UserInputService.WindowFocusReleased:Connect(function()
-        sendHeartbeat()
-    end)
 end
 
--- ANTI-AFK
 local function setupAntiAFK()
     local VirtualUser = game:GetService("VirtualUser")
     game.Players.LocalPlayer.Idled:Connect(function()
@@ -451,7 +350,6 @@ local function setupAntiAFK()
     end)
 end
 
--- WEATHER LISTENER
 local function setupWeatherListener()
     pcall(function()
         game.ReplicatedStorage.GameEvents.WeatherEventStarted.OnClientEvent:Connect(function(weatherType, duration)
@@ -463,27 +361,19 @@ end
 
 -- MAIN FUNCTION
 local function startCleanMonitoring()
-    print("🔥 Clean Monitor Started | Session: " .. Cache.sessionId)
-    print("🥚 REAL-TIME EGG UPDATES - Eggs refresh every second")
-    print("🛍️ NEW EVENTSHOP_UI SUPPORT - Dual method detection")
-    
-    sendToDiscord("🔥 Clean monitor started - WITH EVENTSHOP_UI SUPPORT\nSession: " .. Cache.sessionId, false)
+    print("🔥 MONITOR STARTED | Session: " .. Cache.sessionId)
     
     setupAntiAFK()
     setupWeatherListener()
     setupCrashDetection()
     
-    -- Initial data collection
     local initialData = collectAllData()
-    
-    -- Store initial cache - ADDED EVENTSHOP
     Cache.seeds = initialData.seeds
     Cache.gear = initialData.gear
     Cache.event = initialData.event
     Cache.cosmetic = initialData.cosmetic
     Cache.nightevent = initialData.nightevent
     Cache.honeyevent = initialData.honeyevent
-    Cache.eventshop = initialData.eventshop  -- NEW CACHE
     Cache.eggs = initialData.eggs
     
     Cache.lastHeartbeat = os.time()
@@ -492,75 +382,50 @@ local function startCleanMonitoring()
     sendToAPI(initialData)
     sendHeartbeat()
     
-    print("🚀 Starting main monitoring loop with EventShop_UI support...")
+    print("🚀 MONITORING LOOP STARTED")
     
-    -- MAIN LOOP - EGGS UPDATE EVERY SECOND
+    -- MAIN LOOP
     while true do
         local success, currentData = pcall(collectAllData)
         
         if success then
             local currentTime = os.time()
             
-            -- Create old data for comparison - ADDED EVENTSHOP
             local oldData = {
                 weather = {type = Cache.currentWeather, duration = Cache.weatherDuration},
                 eggs = Cache.eggs,
                 seeds = Cache.seeds, gear = Cache.gear, event = Cache.event,
-                cosmetic = Cache.cosmetic, nightevent = Cache.nightevent, 
-                honeyevent = Cache.honeyevent, eventshop = Cache.eventshop
+                cosmetic = Cache.cosmetic, nightevent = Cache.nightevent, honeyevent = Cache.honeyevent
             }
             
-            -- Check for changes
             local changes = hasChanges(oldData, currentData)
             
-            -- Send update every second (eggs are always fresh)
             if sendToAPI(currentData) then
-                -- Update cache with new data - ADDED EVENTSHOP
                 Cache.seeds = currentData.seeds
                 Cache.gear = currentData.gear
                 Cache.event = currentData.event
                 Cache.cosmetic = currentData.cosmetic
                 Cache.nightevent = currentData.nightevent
                 Cache.honeyevent = currentData.honeyevent
-                Cache.eventshop = currentData.eventshop  -- UPDATE EVENTSHOP CACHE
                 Cache.eggs = currentData.eggs
                 
-                -- Log changes
                 if changes then
-                    print("📊 Update #" .. Cache.updateCounter .. " (Changes detected)")
-                    
-                    -- Log counts for debugging
-                    local eggCount = #currentData.eggs
-                    local eventShopCount = 0
-                    for _ in pairs(currentData.eventshop) do eventShopCount = eventShopCount + 1 end
-                    
-                    if eggCount > 0 then
-                        print("🥚 Current eggs: " .. eggCount .. " types")
-                    end
-                    if eventShopCount > 0 then
-                        print("🛍️ EventShop items: " .. eventShopCount)
-                    end
+                    print("🔄 CHANGES DETECTED & SENT")
                 end
             end
             
-            -- Heartbeat every 10 seconds
             if (currentTime - Cache.lastHeartbeat) >= HEARTBEAT_INTERVAL then
                 sendHeartbeat()
                 Cache.lastHeartbeat = currentTime
             end
             
-            -- Discord update every 5 minutes
             if (currentTime - Cache.lastDiscordUpdate) >= DISCORD_UPDATE_INTERVAL then
-                local eggCount = #Cache.eggs
-                local eventShopCount = 0
-                for _ in pairs(Cache.eventshop) do eventShopCount = eventShopCount + 1 end
-                
-                sendToDiscord("📊 Monitor running - Update #" .. Cache.updateCounter .. "\n🥚 Tracking " .. eggCount .. " egg types\n🛍️ EventShop: " .. eventShopCount .. " items", false)
+                sendToDiscord("📊 Monitor running - Update #" .. Cache.updateCounter, false)
                 Cache.lastDiscordUpdate = currentTime
             end
             
         else
-            print("❌ Error in main loop:", currentData)
+            print("❌ ERROR:", currentData)
             autoDeleteOnCrash()
             break
         end
@@ -569,5 +434,5 @@ local function startCleanMonitoring()
     end
 end
 
--- START CLEAN MONITORING
+-- START
 startCleanMonitoring()
