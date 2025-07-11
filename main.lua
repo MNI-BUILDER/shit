@@ -2,7 +2,7 @@
 print("🔥 Clean Real-Time Monitor Starting - WITH EVENTSHOP_UI SUPPORT...")
 
 -- Configuration
-local API_ENDPOINT = "https://gagdata.vercel.app/api/data"
+local API_ENDPOINT = "https://groweas.vercel.app/api/data"
 local DELETE_ENDPOINT = "https://gagdata.vercel.app/api/delete"
 local API_KEY = "GAMERSBERGGAG"
 local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1375178535198785586/-kGnmx4QJnWlOOqPutLGurRu132ALTTAne8d4MMgNvTJg825vkpT1yU9R_-s74GBDO9z"
