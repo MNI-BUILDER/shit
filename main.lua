@@ -1,9 +1,9 @@
--- CLEAN REAL-TIME MONITOR - MINIMAL LOGGING VERSION
-print("🔥 Starting Clean Monitor...")
+-- CLEAN REAL-TIME MONITOR - NEW API + PETSHOP UI EGGS
+print("🔥 Starting Clean Monitor with NEW API...")
 
--- Configuration
+-- Configuration - NEW API
 local API_ENDPOINT = "https://groweas.vercel.app/api/data"
-local DELETE_ENDPOINT = "https://gagdata.vercel.app/api/delete"
+local DELETE_ENDPOINT = "https://groweas.vercel.app/api/delete"
 local API_KEY = "GAMERSBERGGAG"
 local DISCORD_WEBHOOK = "https://discord.com/api/webhooks/1375178535198785586/-kGnmx4QJnWlOOqPutLGurRu132ALTTAne8d4MMgNvTJg825vkpT1yU9R_-s74GBDO9z"
 local CHECK_INTERVAL = 1
@@ -77,29 +77,77 @@ local function autoDeleteOnCrash()
     end)
 end
 
--- COLLECT EGGS - SIMPLE & FAST
+-- NEW EGG COLLECTION - FROM PETSHOP_UI
 local function collectEggData()
     local success, result = pcall(function()
-        local NPCs = workspace:FindFirstChild("NPCS")
-        if not NPCs then return {} end
+        local shopUI = game.Players.LocalPlayer.PlayerGui:FindFirstChild("PetShop_UI")
+        if not shopUI then return {} end
+
+        -- Find scroll frame like other shops
+        local scrollFrame
+        if shopUI:FindFirstChild("Frame") and shopUI.Frame:FindFirstChild("ScrollingFrame") then
+            scrollFrame = shopUI.Frame.ScrollingFrame
+        else
+            for _, child in pairs(shopUI:GetDescendants()) do
+                if child:IsA("ScrollingFrame") or child.Name == "ContentFrame" then
+                    scrollFrame = child
+                    break
+                end
+            end
+        end
+        if not scrollFrame then return {} end
+
+        local eggs = {}
         
-        local PetStand = NPCs:FindFirstChild("Pet Stand")
-        if not PetStand then return {} end
-        
-        local EggLocations = PetStand:FindFirstChild("EggLocations") or 
-                            PetStand:FindFirstChild("Egg Locations") or 
-                            PetStand:FindFirstChild("Eggs")
-        if not EggLocations then return {} end
-        
-        local eggCounts = {}
-        for _, eggModel in pairs(EggLocations:GetChildren()) do
-            local eggName = eggModel.Name
-            eggCounts[eggName] = (eggCounts[eggName] or 0) + 1
+        -- Method 1: Standard shop method
+        for _, item in pairs(scrollFrame:GetChildren()) do
+            if item:IsA("Frame") and not shouldIgnoreItem(item.Name) then
+                -- Get stock for this egg
+                local stock = "0"
+                for _, desc in ipairs(item:GetDescendants()) do
+                    if desc:IsA("TextLabel") and (desc.Name == "Stock_Text" or desc.Name == "STOCK_TEXT") then
+                        stock = desc.Text:match("%d+") or "0"
+                        break
+                    end
+                end
+                
+                table.insert(eggs, {name = item.Name, quantity = tonumber(stock) or 0})
+            end
         end
         
-        local eggs = {}
-        for eggName, count in pairs(eggCounts) do
-            table.insert(eggs, {name = eggName, quantity = count})
+        -- Method 2: Alternative method (like honey event)
+        if #eggs == 0 then
+            for _, obj in ipairs(shopUI:GetDescendants()) do
+                if obj:IsA("Frame") and not shouldIgnoreItem(obj.Name) then
+                    for _, child in ipairs(obj:GetDescendants()) do
+                        if child:IsA("TextLabel") and child.Name == "Stock_Text" then
+                            local stock = tonumber(child.Text:match("%d+")) or 0
+                            table.insert(eggs, {name = obj.Name, quantity = stock})
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- Method 3: Cosmetic-style segments
+        if #eggs == 0 then
+            for _, segment in pairs(scrollFrame:GetChildren()) do
+                if segment:IsA("Frame") and (segment.Name == "TopSegment" or segment.Name == "BottomSegment") then
+                    for _, item in pairs(segment:GetChildren()) do
+                        if item:IsA("Frame") and not shouldIgnoreItem(item.Name) then
+                            local stock = "0"
+                            for _, desc in ipairs(item:GetDescendants()) do
+                                if desc:IsA("TextLabel") and (desc.Name == "Stock_Text" or desc.Name == "STOCK_TEXT") then
+                                    stock = desc.Text:match("%d+") or "0"
+                                    break
+                                end
+                            end
+                            table.insert(eggs, {name = item.Name, quantity = tonumber(stock) or 0})
+                        end
+                    end
+                end
+            end
         end
         
         return eggs
@@ -219,7 +267,7 @@ local function collectAllData()
     -- MAIN LOGGING - WHAT WE FOUND
     local foundData = {}
     
-    -- Check eggs
+    -- Check eggs from PetShop_UI
     if #freshEggs > 0 then
         foundData.eggs = #freshEggs .. " types"
     else
@@ -263,7 +311,7 @@ local function collectAllData()
     return data
 end
 
--- SEND TO API
+-- SEND TO API - NEW ENDPOINT
 local function sendToAPI(data)
     local success = pcall(function()
         Cache.updateCounter = Cache.updateCounter + 1
@@ -284,9 +332,9 @@ local function sendToAPI(data)
     end)
     
     if success then
-        print("✅ API UPDATE #" .. Cache.updateCounter)
+        print("✅ NEW API UPDATE #" .. Cache.updateCounter)
     else
-        print("❌ API FAILED #" .. Cache.updateCounter)
+        print("❌ NEW API FAILED #" .. Cache.updateCounter)
     end
     
     return success
@@ -361,7 +409,8 @@ end
 
 -- MAIN FUNCTION
 local function startCleanMonitoring()
-    print("🔥 MONITOR STARTED | Session: " .. Cache.sessionId)
+    print("🔥 MONITOR STARTED | NEW API | Session: " .. Cache.sessionId)
+    print("🥚 EGGS FROM PETSHOP_UI | ALL METHODS APPLIED")
     
     setupAntiAFK()
     setupWeatherListener()
@@ -382,7 +431,7 @@ local function startCleanMonitoring()
     sendToAPI(initialData)
     sendHeartbeat()
     
-    print("🚀 MONITORING LOOP STARTED")
+    print("🚀 MONITORING LOOP STARTED WITH NEW API")
     
     -- MAIN LOOP
     while true do
@@ -410,7 +459,7 @@ local function startCleanMonitoring()
                 Cache.eggs = currentData.eggs
                 
                 if changes then
-                    print("🔄 CHANGES DETECTED & SENT")
+                    print("🔄 CHANGES DETECTED & SENT TO NEW API")
                 end
             end
             
@@ -420,7 +469,7 @@ local function startCleanMonitoring()
             end
             
             if (currentTime - Cache.lastDiscordUpdate) >= DISCORD_UPDATE_INTERVAL then
-                sendToDiscord("📊 Monitor running - Update #" .. Cache.updateCounter, false)
+                sendToDiscord("📊 Monitor running - NEW API - Update #" .. Cache.updateCounter, false)
                 Cache.lastDiscordUpdate = currentTime
             end
             
